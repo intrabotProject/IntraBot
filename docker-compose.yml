@@ -1,0 +1,92 @@
+services:
+  ingestion:
+    build:
+      context: ./intrabot-ingestion
+    ports:
+      - "8001:8001"
+    environment:
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      SOURCE_DIR: /app/data/docs
+      CHROMA_PATH: /app/data/chroma
+      METADATA_REGISTRY_PATH: /app/data/document_registry.json
+      COLLECTION_NAME: intrabot
+      ONNXRUNTIME_DISABLE_CPU_AFFINITY: "1"
+    volumes:
+      - intrabot_data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  search:
+    build:
+      context: ./intrabot-search/intrabot-search-hexagonal
+    ports:
+      - "8002:8002"
+    environment:
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      INGESTION_SERVICE_URL: http://ingestion:8001
+      CHROMA_PATH: /app/data/chroma
+      CHROMA_COLLECTION_NAME: intrabot
+    volumes:
+      - intrabot_data:/app/data
+    depends_on:
+      ingestion:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  gateway:
+    build:
+      context: ./intrabot-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      INGESTION_SERVICE_URL: http://ingestion:8001
+      SEARCH_SERVICE_URL: http://search:8002
+      HTTP_TIMEOUT: 120
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
+      DATABASE_URL: sqlite:////app/data/users.db
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@intrabot.local}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123456}
+    volumes:
+      - gateway_data:/app/data
+    depends_on:
+      ingestion:
+        condition: service_healthy
+      search:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./intrabot-frontend
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+
+volumes:
+  intrabot_data:
+  gateway_data:
